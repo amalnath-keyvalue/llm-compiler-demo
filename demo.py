@@ -29,12 +29,8 @@ def main():
         print(f"Example {i}: {example}")
         print("-" * 50)
 
-        for step in compiler.run(example):
-            for node, data in step.items():
-                if "messages" in data and data["messages"]:
-                    message = data["messages"][-1]
-                    print(f"{node}: {message.content}")
-                    print()
+        result = compiler.run(example)
+        print(f"Result: {result}")
 
         print("=" * 60)
         print()
