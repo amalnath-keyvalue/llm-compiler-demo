@@ -18,23 +18,28 @@ A complete implementation of the LLMCompiler architecture from the [LangGraph tu
 
 ## 🛠️ Setup
 
-1. Install Poetry:
+1. Set Python version:
 ```bash
-pip install poetry
+pyenv local 3.12
 ```
 
-2. Install dependencies:
+2. Install Poetry:
+```bash
+pipx install poetry
+```
+
+3. Install dependencies:
 ```bash
 poetry install
 ```
 
-3. Set OpenAI API key:
+4. Set OpenAI API key:
 ```bash
 cp env.example .env
 # Edit .env with your API key
 ```
 
-4. Run demo:
+5. Run demo:
 ```bash
 poetry run python demo.py
 ```
