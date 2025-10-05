@@ -1,8 +1,8 @@
 import os
-import time
 
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
+
+from config import get_llm
 
 
 @tool
@@ -11,8 +11,6 @@ def create_file(
     content: str,
 ) -> str:
     """Create a file with specified content in the demo_output folder"""
-    time.sleep(2)
-
     if not path.startswith("demo_output/"):
         path = f"demo_output/{path}"
 
@@ -29,9 +27,6 @@ def create_directory(
     path: str,
 ) -> str:
     """Create a directory in the demo_output folder"""
-    time.sleep(1)
-
-    # Always create directories under demo_output/ to keep them gitignored
     if not path.startswith("demo_output/"):
         path = f"demo_output/{path}"
 
@@ -46,7 +41,7 @@ def generate_code(
     context: list[str] | None = None,
 ) -> str:
     """Generate code based on description"""
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = get_llm()
 
     prompt = f"Generate {language} code for: {description}"
     if context:

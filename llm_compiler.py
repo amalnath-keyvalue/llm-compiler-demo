@@ -7,11 +7,12 @@ from typing import Any
 from langchain import hub
 from langchain_core.messages import AIMessage, FunctionMessage, HumanMessage
 from langchain_core.tools import BaseTool
-from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
+
+from config import get_llm
 
 
 class Task(BaseModel):
@@ -46,22 +47,22 @@ class LLMCompilerPlanParser:
 
         return ", ".join(param_descriptions) if param_descriptions else "none"
 
-    def stream(self, messages: list):
+    def stream(self, messages: list, execution_start: float):
         prompt = hub.pull("wfh/llm-compiler")
 
-        tool_descriptions = "\n".join(
+        tool_descriptions = f"""{"\n".join(
             f"{i + 1}. {tool.name}: {tool.description}\n"
             f"   Parameters: {self._get_tool_params(tool)}\n"
             for i, tool in enumerate(self.tools.values())
-        )
+        )}
 
-        tool_descriptions += f"\nIMPORTANT: You MUST use the exact tool names: {', '.join(tool.name for tool in self.tools.values())}"
-        tool_descriptions += "\n\nUse the correct parameter names and types as defined in the tool descriptions above."
-        tool_descriptions += (
-            "\n\nDEPENDENCIES: Use $N syntax to reference outputs from previous tasks."
-        )
-        tool_descriptions += "\nExample: tool_name(param='$1', other_param='$2') - uses outputs from tasks 1 and 2"
-        tool_descriptions += "\nThis creates a DAG where tasks execute based on dependencies, not plan order!"
+IMPORTANT: You MUST use the exact tool names: {', '.join(tool.name for tool in self.tools.values())}
+
+Use the correct parameter names and types as defined in the tool descriptions above.
+
+DEPENDENCIES: Use $N syntax to reference outputs from previous tasks.
+Example: tool_name(param='$1', other_param='$2') - uses outputs from tasks 1 and 2
+This creates a DAG where tasks execute based on dependencies, not plan order!"""
 
         planner_prompt = prompt.partial(
             replan="",
@@ -69,21 +70,19 @@ class LLMCompilerPlanParser:
             tool_descriptions=tool_descriptions,
         )
 
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
+        llm = get_llm()
         buffer = ""
         seen_tasks = set()
-        start_time = time.time()
 
         for chunk in llm.stream(planner_prompt.format(messages=messages)):
             if hasattr(chunk, "content") and chunk.content:
                 buffer += chunk.content
-
                 tasks = self._parse_tasks(buffer)
+
                 for task in tasks:
                     if task.idx not in seen_tasks:
                         seen_tasks.add(task.idx)
-                        current_time = time.time() - start_time
+                        current_time = time.time() - execution_start
                         deps_str = (
                             f" (deps: {task.dependencies})"
                             if task.dependencies
@@ -101,45 +100,51 @@ class LLMCompilerPlanParser:
 
         for line in lines:
             line = line.strip()
-            if re.match(r"^\d+\.", line):
-                parts = line.split(".", 1)
-                if len(parts) > 1:
-                    idx = int(parts[0])
+            if not re.match(r"^\d+\.", line):
+                continue
 
-                    if idx in seen_indices:
+            parts = line.split(".", 1)
+            if len(parts) < 2:
+                continue
+
+            idx = int(parts[0])
+            if idx in seen_indices:
+                continue
+            seen_indices.add(idx)
+
+            task_content = parts[1].strip()
+            if "(" not in task_content or ")" not in task_content:
+                continue
+
+            tool_name = task_content.split("(")[0].strip()
+            args_str = task_content.split("(")[1].split(")")[0]
+
+            args = {}
+            dependencies = []
+
+            if args_str:
+                for arg in args_str.split(","):
+                    if "=" not in arg:
                         continue
-                    seen_indices.add(idx)
 
-                    task_content = parts[1].strip()
+                    key, value = arg.split("=", 1)
+                    key = key.strip()
+                    value = value.strip().strip("\"'")
+                    args[key] = value
 
-                    if "(" in task_content and ")" in task_content:
-                        tool_name = task_content.split("(")[0].strip()
-                        args_str = task_content.split("(")[1].split(")")[0]
+                    if value.startswith("$"):
+                        dep_match = re.search(r"\$(\d+)", value)
+                        if dep_match:
+                            dependencies.append(int(dep_match.group(1)))
 
-                        args = {}
-                        dependencies = []
-
-                        if args_str:
-                            for arg in args_str.split(","):
-                                if "=" in arg:
-                                    key, value = arg.split("=", 1)
-                                    key = key.strip()
-                                    value = value.strip().strip("\"'")
-                                    args[key] = value
-
-                                    if value.startswith("$"):
-                                        dep_match = re.search(r"\$(\d+)", value)
-                                        if dep_match:
-                                            dependencies.append(int(dep_match.group(1)))
-
-                        if tool_name in self.tools or tool_name == "join":
-                            task = Task(
-                                idx=idx,
-                                tool=tool_name,
-                                args=args,
-                                dependencies=dependencies,
-                            )
-                            tasks.append(task)
+            if tool_name in self.tools or tool_name == "join":
+                task = Task(
+                    idx=idx,
+                    tool=tool_name,
+                    args=args,
+                    dependencies=dependencies,
+                )
+                tasks.append(task)
 
         return tasks
 
@@ -168,15 +173,10 @@ def _execute_task(
     config: dict[str, Any],
     tools: dict[str, Any],
 ):
-    tool_to_use = task.tool
-    if isinstance(tool_to_use, str):
-        tool_to_use = tools.get(tool_to_use)
-        if tool_to_use is None:
-            return f"ERROR: Tool '{task.tool}' not found"
-
-    args = task.args
-    resolved_args = {key: _resolve_arg(val, observations) for key, val in args.items()}
-
+    tool_to_use = tools[task.tool]
+    resolved_args = {
+        key: _resolve_arg(val, observations) for key, val in task.args.items()
+    }
     return tool_to_use.invoke(resolved_args, config)
 
 
@@ -185,9 +185,10 @@ def schedule_task(task_inputs: dict[str, Any], config: dict[str, Any]):
     observations: dict[int, Any] = task_inputs["observations"]
     tools: dict[str, Any] = task_inputs["tools"]
 
-    start_time = time.time()
+    execution_start = config.get("start_time", time.time())
+    current_time = time.time()
     print(
-        f"[{start_time - config.get('start_time', start_time):.3f}s] 🚀 STARTED task {task.idx}: {task.tool}({task.args})"
+        f"[{current_time - execution_start:.3f}s] 🚀 STARTED task {task.idx}: {task.tool}({task.args})"
     )
 
     observation = _execute_task(task, observations, config, tools)
@@ -195,7 +196,7 @@ def schedule_task(task_inputs: dict[str, Any], config: dict[str, Any]):
 
     end_time = time.time()
     print(
-        f"[{end_time - config.get('start_time', end_time):.3f}s] ✅ COMPLETED task {task.idx}: {task.tool}"
+        f"[{end_time - execution_start:.3f}s] ✅ COMPLETED task {task.idx}: {task.tool}"
     )
 
 
@@ -203,21 +204,22 @@ def schedule_pending_task(
     task: Task,
     observations: dict[int, Any],
     tools: dict[str, Any],
+    execution_start: float,
     retry_after: float = 0.2,
 ):
-    start_time = time.time()
+    current_time = time.time()
     print(
-        f"[{start_time - time.time():.3f}s] ⏳ WAITING task {task.idx}: {task.tool} (deps: {task.dependencies})"
+        f"[{current_time - execution_start:.3f}s] ⏳ WAITING task {task.idx}: {task.tool} (deps: {task.dependencies})"
     )
 
     while True:
         deps = task.dependencies
-        if deps and (any([dep not in observations for dep in deps])):
+        if deps and any(dep not in observations for dep in deps):
             time.sleep(retry_after)
             continue
         schedule_task(
             {"task": task, "observations": observations, "tools": tools},
-            {"start_time": start_time},
+            {"start_time": execution_start},
         )
         break
 
@@ -225,42 +227,30 @@ def schedule_pending_task(
 def schedule_tasks(scheduler_input: dict[str, Any]) -> list[FunctionMessage]:
     """Task Fetching Unit - schedules and executes tasks as soon as they are executable"""
     tasks = scheduler_input["tasks"]
-    args_for_tasks = {}
     messages = scheduler_input["messages"]
     tools = scheduler_input["tools"]
+    execution_start = scheduler_input["execution_start"]
     observations = _get_observations(messages)
     task_names = {}
     originals = set(observations)
 
-    # Create tools lookup dictionary
     tools_dict = {tool.name: tool for tool in tools}
-
     futures = []
-    retry_after = 0.25
-    execution_start = time.time()
 
-    print(f"[{0.000:.3f}s] 🚀 Task Fetching Unit: Starting parallel execution...")
+    print(f"[{time.time() - execution_start:.3f}s] 🚀 Task Fetching Unit: Initialized")
 
     with ThreadPoolExecutor() as executor:
-        # Collect all tasks first for true parallel execution
-        all_tasks = list(tasks)
-        print(
-            f"[{time.time() - execution_start:.3f}s] 📋 Collected {len(all_tasks)} tasks for parallel execution"
-        )
+        print(f"[{time.time() - execution_start:.3f}s] 🚀 Starting eager execution...")
 
-        # Process all tasks for parallel execution
-        for task in all_tasks:
+        args_for_tasks = {}
+        for task in tasks:
             deps = task.dependencies
-            task_names[task.idx] = (
-                task.tool if isinstance(task.tool, str) else task.tool.name
-            )
+            task_names[task.idx] = task.tool
             args_for_tasks[task.idx] = task.args
 
-            # Check if task can be executed immediately (no dependencies or all deps satisfied)
-            if deps and (any([dep not in observations for dep in deps])):
-                # Task has unsatisfied dependencies - queue it for later
+            if deps and any(dep not in observations for dep in deps):
                 print(
-                    f"[{time.time() - execution_start:.3f}s] ⏳ QUEUED task {task.idx}: {task.tool} (waiting for: {', '.join(map(str, deps))})"
+                    f"[{time.time() - execution_start:.3f}s] ⏳ QUEUED {task.idx}: {task.tool} (waiting for: {', '.join(map(str, deps))})"
                 )
                 futures.append(
                     executor.submit(
@@ -268,13 +258,12 @@ def schedule_tasks(scheduler_input: dict[str, Any]) -> list[FunctionMessage]:
                         task,
                         observations,
                         tools_dict,
-                        retry_after,
+                        execution_start,
                     )
                 )
             else:
-                # Task can be executed immediately - dispatch to thread pool for parallel execution
                 print(
-                    f"[{time.time() - execution_start:.3f}s] 🚀 DISPATCHED task {task.idx}: {task.tool}"
+                    f"[{time.time() - execution_start:.3f}s] 🚀 DISPATCHED {task.idx}: {task.tool}"
                 )
                 futures.append(
                     executor.submit(
@@ -284,7 +273,6 @@ def schedule_tasks(scheduler_input: dict[str, Any]) -> list[FunctionMessage]:
                     )
                 )
 
-        # Wait for all tasks to complete (both immediate and queued)
         print(
             f"[{time.time() - execution_start:.3f}s] ⏳ Task Fetching Unit: Waiting for all tasks to complete..."
         )
@@ -293,11 +281,11 @@ def schedule_tasks(scheduler_input: dict[str, Any]) -> list[FunctionMessage]:
             f"[{time.time() - execution_start:.3f}s] ✅ Task Fetching Unit: All tasks completed!"
         )
 
-    # Convert observations to tool messages
     new_observations = {
         k: (task_names[k], args_for_tasks[k], observations[k])
         for k in sorted(observations.keys() - originals)
     }
+
     tool_messages = [
         FunctionMessage(
             name=name,
@@ -313,10 +301,10 @@ def schedule_tasks(scheduler_input: dict[str, Any]) -> list[FunctionMessage]:
 def plan_and_schedule(state: State):
     messages = state.messages
     tools = state.tools
+    execution_start = time.time()
     planner = LLMCompilerPlanParser(tools)
-    tasks = planner.stream(messages)
+    tasks = planner.stream(messages, execution_start)
 
-    # Eager execution: dispatch tasks as they're planned
     tasks = itertools.chain([next(tasks)], tasks)
 
     scheduled_tasks = schedule_tasks(
@@ -324,6 +312,7 @@ def plan_and_schedule(state: State):
             "messages": messages,
             "tasks": tasks,
             "tools": tools,
+            "execution_start": execution_start,
         }
     )
     return State(messages=scheduled_tasks, tools=tools)
@@ -331,7 +320,6 @@ def plan_and_schedule(state: State):
 
 def _joiner(state: State):
     print("🔗 Joining results...")
-
     messages = state.messages
     user_input = messages[0].content
 
@@ -339,7 +327,7 @@ def _joiner(state: State):
 
 Based on the completed tasks, provide a comprehensive response summarizing what was accomplished."""
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    llm = get_llm()
     response = llm.invoke([HumanMessage(content=prompt)])
     print(f"📝 Final response: {response.content[:200]}...")
 
@@ -375,5 +363,4 @@ class LLMCompiler:
             tools=self.tools,
         )
 
-        for step in self.graph.stream(initial_state):
-            yield step
+        return self.graph.invoke(initial_state)

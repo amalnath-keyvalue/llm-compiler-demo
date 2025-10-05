@@ -1,8 +1,22 @@
 # LLMCompiler Demo
 
-A minimal demonstration of LLMCompiler architecture using LangGraph. Shows eager execution of tasks in a DAG with parallel processing.
+A complete implementation of the LLMCompiler architecture from the [LangGraph tutorial](https://langchain-ai.github.io/langgraph/tutorials/llm-compiler/).
 
-## Setup
+## 🚀 Key Features
+
+- **Faster Execution**: Tasks run in parallel as soon as dependencies are met, not sequentially
+- **Cost Efficient**: Reduces redundant LLM calls by reusing task outputs with `$N` syntax
+- **Flexible Tools**: Works with any LangChain tools - just swap them in
+- **Dependency Management**: Automatically handles task dependencies and execution order
+- **Real-time Progress**: See tasks execute immediately as they're planned
+
+## 📋 Architecture
+
+- **Planner**: Streams tasks from LLM using LangChain Hub prompts
+- **Task Fetching Unit**: Dispatches tasks immediately when dependencies are met
+- **Joiner**: Summarizes results and determines completion
+
+## 🛠️ Setup
 
 1. Install Poetry:
 ```bash
@@ -24,24 +38,3 @@ cp env.example .env
 ```bash
 poetry run python demo.py
 ```
-
-## Architecture
-
-- **Planner**: Creates a DAG of tasks with dependencies
-- **Task Scheduler**: Executes all ready tasks in parallel
-- **Joiner**: Determines completion and summarizes results
-
-## Key Features
-
-- **DAG Planning**: Creates dependency graphs upfront
-- **Eager Execution**: Runs tasks in parallel when dependencies are met
-- **Tool Agnostic**: Works with any LangChain tools
-- **Circular Dependency Detection**: Validates DAG structure
-- **Gitignored Output**: All scaffolding goes to `demo_output/` folder
-
-## Files
-
-- `llm_compiler.py` - Generic LLMCompiler framework
-- `scaffolding_tools.py` - Project scaffolding tools
-- `demo.py` - Example usage with scaffolding
-
