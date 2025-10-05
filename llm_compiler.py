@@ -1,4 +1,5 @@
 import concurrent.futures
+import logging
 from typing import Annotated, Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
@@ -8,6 +9,9 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
+logger = logging.getLogger(__name__)
 
 
 class Task(BaseModel):
@@ -33,7 +37,10 @@ class State(BaseModel):
 
 class LLMCompiler:
     def __init__(self, tools: list[BaseTool]) -> None:
-        self.llm: ChatOpenAI = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+        self.llm: ChatOpenAI = ChatOpenAI(
+            model="gpt-4o-mini",
+            temperature=0,
+        )
         self.tools: list[BaseTool] = tools
         self.tool_map: dict[str, BaseTool] = {tool.name: tool for tool in self.tools}
         self.graph = self._build_graph()
@@ -57,9 +64,27 @@ class LLMCompiler:
         state: State,
     ):
         user_input = state.messages[-1].content
-        tool_descriptions = [
-            f"- {tool.name}: {tool.description}" for tool in self.tools
-        ]
+        logger.info("Planning: %s", user_input)
+
+        tool_descriptions = []
+        for tool in self.tools:
+            schema_model = tool.get_input_schema()
+            schema_dict = schema_model.model_json_schema()
+            properties = schema_dict.get("properties", {})
+            required_fields = schema_dict.get("required", [])
+
+            param_info = []
+            for param_name, param_details in properties.items():
+                param_type = param_details.get("type", "unknown")
+                param_desc = param_details.get("description", "")
+                required = param_name in required_fields
+                required_str = " (required)" if required else " (optional)"
+                param_info.append(
+                    f"    {param_name} ({param_type}){required_str}: {param_desc}"
+                )
+
+            param_str = "\n".join(param_info) if param_info else "    No parameters"
+            tool_descriptions.append(f"- {tool.name}: {tool.description}\n{param_str}")
 
         parser = PydanticOutputParser(pydantic_object=TaskDAG)
 
@@ -69,7 +94,7 @@ Available tools:
 {chr(10).join(tool_descriptions)}
 
 Key points:
-- Use only available tools
+- Use only available tools with exact parameter names shown above
 - Tasks with no dependencies can run immediately
 - Tasks with dependencies wait for those to complete
 - Multiple tasks can run in parallel if their dependencies are satisfied
@@ -80,8 +105,17 @@ Key points:
 
         try:
             task_dag = parser.parse(response.content)
+            logger.info("Generated %d tasks", len(task_dag.tasks))
 
             if self._validate_dag(task_dag):
+                for task_id, task in task_dag.tasks.items():
+                    deps = (
+                        f" (depends on: {', '.join(task.dependencies)})"
+                        if task.dependencies
+                        else ""
+                    )
+                    logger.info("  %s: %s%s", task_id, task.tool, deps)
+
                 return {
                     "messages": [
                         AIMessage(
@@ -91,9 +125,11 @@ Key points:
                     "task_dag": task_dag,
                 }
 
+            logger.error("Invalid DAG structure")
             return {"messages": [AIMessage(content="Invalid DAG structure")]}
 
         except Exception as e:
+            logger.error("Failed to create task DAG: %s", str(e))
             return {
                 "messages": [AIMessage(content=f"Failed to create task DAG: {str(e)}")]
             }
@@ -157,6 +193,18 @@ Key points:
                 deps = task.dependencies
                 if all(dep in completed for dep in deps):
                     executable.append((task_id, task))
+
+        if not executable:
+            return {
+                "messages": [AIMessage(content="All tasks already completed")],
+                "completed_tasks": list(completed),
+                "results": results,
+            }
+
+        logger.info("Executing %d tasks:", len(executable))
+        for task_id, task in executable:
+            logger.info("  %s: %s", task_id, task.tool)
+
         with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
             future_to_task = {
                 executor.submit(self._execute_task, task): task_id
@@ -169,9 +217,12 @@ Key points:
                     result = future.result()
                     results[task_id] = result
                     completed.add(task_id)
+                    logger.info("  ✓ %s", task_id)
                 except Exception as e:
-                    results[task_id] = f"Error: {str(e)}"
+                    error_msg = f"Error: {str(e)}"
+                    results[task_id] = error_msg
                     completed.add(task_id)
+                    logger.error("  ✗ %s: %s", task_id, str(e))
 
         return {
             "messages": [
@@ -189,12 +240,17 @@ Key points:
             raise ValueError(f"Unknown tool: {task.tool}")
 
         tool = self.tool_map[task.tool]
-        return tool.invoke(task.args)
+        logger.info("  → %s", task.tool)
+        result = tool.invoke(task.args)
+        return result
 
     def _joiner(
         self,
         state: State,
     ):
+        if not state.task_dag:
+            return {"messages": [AIMessage(content="No tasks to process")]}
+
         tasks = state.task_dag.tasks
         completed = set(state.completed_tasks)
 
