@@ -1,4 +1,5 @@
 import os
+import time
 
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
@@ -10,6 +11,8 @@ def create_file(
     content: str,
 ) -> str:
     """Create a file with specified content in the demo_output folder"""
+    time.sleep(2)
+
     if not path.startswith("demo_output/"):
         path = f"demo_output/{path}"
 
@@ -26,6 +29,8 @@ def create_directory(
     path: str,
 ) -> str:
     """Create a directory in the demo_output folder"""
+    time.sleep(1)
+
     # Always create directories under demo_output/ to keep them gitignored
     if not path.startswith("demo_output/"):
         path = f"demo_output/{path}"

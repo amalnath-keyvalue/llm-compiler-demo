@@ -1,195 +1,379 @@
-import logging
+import itertools
+import re
+import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from typing import Any
 
-from langchain_core.messages import HumanMessage
-from langchain_core.output_parsers import PydanticOutputParser
+from langchain import hub
+from langchain_core.messages import AIMessage, FunctionMessage, HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
+from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from pydantic import BaseModel, Field
-
-logging.basicConfig(level=logging.INFO, format="%(message)s")
-logger = logging.getLogger(__name__)
+from typing_extensions import Annotated
 
 
 class Task(BaseModel):
-    id: str = Field(description="Unique identifier for the task")
+    idx: int = Field(description="Task index")
     tool: str = Field(description="Name of the tool to execute")
     args: dict[str, Any] = Field(description="Arguments to pass to the tool")
-    dependencies: list[str] = Field(description="List of task IDs this task depends on")
+    dependencies: list[int] = Field(
+        description="List of task indices this task depends on", default_factory=list
+    )
 
 
-class TaskPlan(BaseModel):
-    tasks: list[Task] = Field(description="List of tasks to execute")
+class State(BaseModel):
+    messages: Annotated[list, add_messages]
+    tools: list[BaseTool]
 
 
-class Planner:
-    def __init__(
-        self,
-        llm: ChatOpenAI,
-        tools: list[BaseTool],
-    ):
-        self.llm = llm
-        self.tools = tools
-        self.parser = PydanticOutputParser(pydantic_object=TaskPlan)
-
-    def plan(
-        self,
-        user_input: str,
-    ) -> list[Task]:
-        logger.info("Planning: %s", user_input)
-
-        prompt = f"""Break down this request into a sequence of tasks: {user_input}
-
-Available tools:
-{self._get_tool_descriptions()}
-
-Create a plan with tasks that can run in parallel when possible. Tasks with no dependencies can run immediately, while tasks with dependencies wait for those to complete.
-
-{self.parser.get_format_instructions()}"""
-
-        response = self.llm.invoke([HumanMessage(content=prompt)])
-
-        try:
-            task_plan = self.parser.parse(response.content)
-            logger.info("Generated %d tasks", len(task_plan.tasks))
-            return task_plan.tasks
-        except Exception as e:
-            logger.error("Failed to parse plan: %s", str(e))
-            return []
-
-    def _get_tool_descriptions(
-        self,
-    ) -> str:
-        descriptions = []
-        for tool in self.tools:
-            schema = tool.get_input_schema().model_json_schema()
-            properties = schema.get("properties", {})
-            required = schema.get("required", [])
-
-            params = []
-            for param, details in properties.items():
-                param_type = details.get("type", "unknown")
-                required_str = " (required)" if param in required else " (optional)"
-                params.append(f"    {param} ({param_type}){required_str}")
-
-            param_str = "\n".join(params) if params else "    No parameters"
-            descriptions.append(f"- {tool.name}: {tool.description}\n{param_str}")
-
-        return "\n".join(descriptions)
-
-
-class TaskScheduler:
-    def __init__(
-        self,
-        tools: list[BaseTool],
-    ):
+class LLMCompilerPlanParser:
+    def __init__(self, tools: list[BaseTool]):
         self.tools = {tool.name: tool for tool in tools}
 
-    def execute_dag(self, tasks: list[Task]) -> dict[str, Any]:
-        if not tasks:
-            return {}
+    def _get_tool_params(self, tool: BaseTool) -> str:
+        schema = tool.get_input_schema().model_json_schema()
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
 
-        results = {}
-        completed = set()
+        param_descriptions = []
+        for param_name, param_info in properties.items():
+            param_type = param_info.get("type", "string")
+            is_required = param_name in required
+            required_str = "required" if is_required else "optional"
+            param_descriptions.append(f"{param_name} ({param_type}, {required_str})")
 
-        while len(completed) < len(tasks):
-            ready_tasks = self._get_ready_tasks(tasks, completed)
+        return ", ".join(param_descriptions) if param_descriptions else "none"
 
-            if not ready_tasks:
-                logger.error("No ready tasks found - possible circular dependency")
-                break
+    def stream(self, messages: list):
+        prompt = hub.pull("wfh/llm-compiler")
 
-            logger.info("Executing %d tasks in parallel:", len(ready_tasks))
-            for task in ready_tasks:
-                logger.info("  %s: %s", task.id, task.tool)
-
-            batch_results = self._execute_batch(ready_tasks)
-            results.update(batch_results)
-            completed.update(task.id for task in ready_tasks)
-
-        return results
-
-    def _get_ready_tasks(
-        self,
-        tasks: list[Task],
-        completed: set,
-    ) -> list[Task]:
-        ready = []
-        for task in tasks:
-            if task.id in completed:
-                continue
-            if all(dep in completed for dep in task.dependencies):
-                ready.append(task)
-        return ready
-
-    def _execute_batch(
-        self,
-        tasks: list[Task],
-    ) -> dict[str, Any]:
-        results = {}
-        for task in tasks:
-            if task.tool in self.tools:
-                logger.info("  → %s", task.tool)
-                try:
-                    result = self.tools[task.tool].invoke(task.args)
-                    results[task.id] = result
-                    logger.info("  ✓ %s", task.id)
-                except Exception as e:
-                    results[task.id] = f"Error: {str(e)}"
-                    logger.error("  ✗ %s: %s", task.id, str(e))
-            else:
-                results[task.id] = f"Error: Tool {task.tool} not found"
-                logger.error("  ✗ %s: Tool not found", task.id)
-        return results
-
-
-class Joiner:
-    def __init__(
-        self,
-        llm: ChatOpenAI,
-    ):
-        self.llm = llm
-
-    def join(
-        self,
-        user_input: str,
-        results: dict[str, Any],
-    ) -> str:
-        if not results:
-            return "No results to process"
-
-        logger.info("Joining results")
-
-        results_summary = "\n".join(
-            [f"Task {task_id}: {result}" for task_id, result in results.items()]
+        tool_descriptions = "\n".join(
+            f"{i + 1}. {tool.name}: {tool.description}\n"
+            f"   Parameters: {self._get_tool_params(tool)}\n"
+            for i, tool in enumerate(self.tools.values())
         )
 
-        prompt = f"""Original request: {user_input}
+        tool_descriptions += f"\nIMPORTANT: You MUST use the exact tool names: {', '.join(tool.name for tool in self.tools.values())}"
+        tool_descriptions += "\n\nUse the correct parameter names and types as defined in the tool descriptions above."
+        tool_descriptions += (
+            "\n\nDEPENDENCIES: Use $N syntax to reference outputs from previous tasks."
+        )
+        tool_descriptions += "\nExample: tool_name(param='$1', other_param='$2') - uses outputs from tasks 1 and 2"
+        tool_descriptions += "\nThis creates a DAG where tasks execute based on dependencies, not plan order!"
 
-Task results:
-{results_summary}
+        planner_prompt = prompt.partial(
+            replan="",
+            num_tools=len(self.tools) + 1,
+            tool_descriptions=tool_descriptions,
+        )
 
-Provide a comprehensive response based on these results."""
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-        response = self.llm.invoke([HumanMessage(content=prompt)])
-        return response.content
+        buffer = ""
+        seen_tasks = set()
+        start_time = time.time()
+
+        for chunk in llm.stream(planner_prompt.format(messages=messages)):
+            if hasattr(chunk, "content") and chunk.content:
+                buffer += chunk.content
+
+                tasks = self._parse_tasks(buffer)
+                for task in tasks:
+                    if task.idx not in seen_tasks:
+                        seen_tasks.add(task.idx)
+                        current_time = time.time() - start_time
+                        deps_str = (
+                            f" (deps: {task.dependencies})"
+                            if task.dependencies
+                            else " (no deps)"
+                        )
+                        print(
+                            f"[{current_time:.3f}s] 📋 PLANNED task {task.idx}: {task.tool}({task.args}){deps_str}"
+                        )
+                        yield task
+
+    def _parse_tasks(self, content: str) -> list[Task]:
+        tasks = []
+        lines = content.split("\n")
+        seen_indices = set()
+
+        for line in lines:
+            line = line.strip()
+            if re.match(r"^\d+\.", line):
+                parts = line.split(".", 1)
+                if len(parts) > 1:
+                    idx = int(parts[0])
+
+                    if idx in seen_indices:
+                        continue
+                    seen_indices.add(idx)
+
+                    task_content = parts[1].strip()
+
+                    if "(" in task_content and ")" in task_content:
+                        tool_name = task_content.split("(")[0].strip()
+                        args_str = task_content.split("(")[1].split(")")[0]
+
+                        args = {}
+                        dependencies = []
+
+                        if args_str:
+                            for arg in args_str.split(","):
+                                if "=" in arg:
+                                    key, value = arg.split("=", 1)
+                                    key = key.strip()
+                                    value = value.strip().strip("\"'")
+                                    args[key] = value
+
+                                    if value.startswith("$"):
+                                        dep_match = re.search(r"\$(\d+)", value)
+                                        if dep_match:
+                                            dependencies.append(int(dep_match.group(1)))
+
+                        if tool_name in self.tools or tool_name == "join":
+                            task = Task(
+                                idx=idx,
+                                tool=tool_name,
+                                args=args,
+                                dependencies=dependencies,
+                            )
+                            tasks.append(task)
+
+        return tasks
+
+
+def _get_observations(messages: list[Any]) -> dict[int, Any]:
+    results = {}
+    for message in messages[::-1]:
+        if isinstance(message, FunctionMessage):
+            results[int(message.additional_kwargs["idx"])] = message.content
+    return results
+
+
+def _resolve_arg(arg: str, observations: dict[int, Any]) -> str:
+    ID_PATTERN = r"\$\{?(\d+)\}?"
+
+    def replace_match(match):
+        idx = int(match.group(1))
+        return str(observations.get(idx, match.group(0)))
+
+    return re.sub(ID_PATTERN, replace_match, arg)
+
+
+def _execute_task(
+    task: Task,
+    observations: dict[int, Any],
+    config: dict[str, Any],
+    tools: dict[str, Any],
+):
+    tool_to_use = task.tool
+    if isinstance(tool_to_use, str):
+        tool_to_use = tools.get(tool_to_use)
+        if tool_to_use is None:
+            return f"ERROR: Tool '{task.tool}' not found"
+
+    args = task.args
+    resolved_args = {key: _resolve_arg(val, observations) for key, val in args.items()}
+
+    return tool_to_use.invoke(resolved_args, config)
+
+
+def schedule_task(task_inputs: dict[str, Any], config: dict[str, Any]):
+    task: Task = task_inputs["task"]
+    observations: dict[int, Any] = task_inputs["observations"]
+    tools: dict[str, Any] = task_inputs["tools"]
+
+    start_time = time.time()
+    print(
+        f"[{start_time - config.get('start_time', start_time):.3f}s] 🚀 STARTED task {task.idx}: {task.tool}({task.args})"
+    )
+
+    observation = _execute_task(task, observations, config, tools)
+    observations[task.idx] = observation
+
+    end_time = time.time()
+    print(
+        f"[{end_time - config.get('start_time', end_time):.3f}s] ✅ COMPLETED task {task.idx}: {task.tool}"
+    )
+
+
+def schedule_pending_task(
+    task: Task,
+    observations: dict[int, Any],
+    tools: dict[str, Any],
+    retry_after: float = 0.2,
+):
+    start_time = time.time()
+    print(
+        f"[{start_time - time.time():.3f}s] ⏳ WAITING task {task.idx}: {task.tool} (deps: {task.dependencies})"
+    )
+
+    while True:
+        deps = task.dependencies
+        if deps and (any([dep not in observations for dep in deps])):
+            time.sleep(retry_after)
+            continue
+        schedule_task(
+            {"task": task, "observations": observations, "tools": tools},
+            {"start_time": start_time},
+        )
+        break
+
+
+def schedule_tasks(scheduler_input: dict[str, Any]) -> list[FunctionMessage]:
+    """Task Fetching Unit - schedules and executes tasks as soon as they are executable"""
+    tasks = scheduler_input["tasks"]
+    args_for_tasks = {}
+    messages = scheduler_input["messages"]
+    tools = scheduler_input["tools"]
+    observations = _get_observations(messages)
+    task_names = {}
+    originals = set(observations)
+
+    # Create tools lookup dictionary
+    tools_dict = {tool.name: tool for tool in tools}
+
+    futures = []
+    retry_after = 0.25
+    execution_start = time.time()
+
+    print(f"[{0.000:.3f}s] 🚀 Task Fetching Unit: Starting parallel execution...")
+
+    with ThreadPoolExecutor() as executor:
+        # Collect all tasks first for true parallel execution
+        all_tasks = list(tasks)
+        print(
+            f"[{time.time() - execution_start:.3f}s] 📋 Collected {len(all_tasks)} tasks for parallel execution"
+        )
+
+        # Process all tasks for parallel execution
+        for task in all_tasks:
+            deps = task.dependencies
+            task_names[task.idx] = (
+                task.tool if isinstance(task.tool, str) else task.tool.name
+            )
+            args_for_tasks[task.idx] = task.args
+
+            # Check if task can be executed immediately (no dependencies or all deps satisfied)
+            if deps and (any([dep not in observations for dep in deps])):
+                # Task has unsatisfied dependencies - queue it for later
+                print(
+                    f"[{time.time() - execution_start:.3f}s] ⏳ QUEUED task {task.idx}: {task.tool} (waiting for: {', '.join(map(str, deps))})"
+                )
+                futures.append(
+                    executor.submit(
+                        schedule_pending_task,
+                        task,
+                        observations,
+                        tools_dict,
+                        retry_after,
+                    )
+                )
+            else:
+                # Task can be executed immediately - dispatch to thread pool for parallel execution
+                print(
+                    f"[{time.time() - execution_start:.3f}s] 🚀 DISPATCHED task {task.idx}: {task.tool}"
+                )
+                futures.append(
+                    executor.submit(
+                        schedule_task,
+                        dict(task=task, observations=observations, tools=tools_dict),
+                        {"start_time": execution_start},
+                    )
+                )
+
+        # Wait for all tasks to complete (both immediate and queued)
+        print(
+            f"[{time.time() - execution_start:.3f}s] ⏳ Task Fetching Unit: Waiting for all tasks to complete..."
+        )
+        wait(futures)
+        print(
+            f"[{time.time() - execution_start:.3f}s] ✅ Task Fetching Unit: All tasks completed!"
+        )
+
+    # Convert observations to tool messages
+    new_observations = {
+        k: (task_names[k], args_for_tasks[k], observations[k])
+        for k in sorted(observations.keys() - originals)
+    }
+    tool_messages = [
+        FunctionMessage(
+            name=name,
+            content=str(obs),
+            additional_kwargs={"idx": k, "args": task_args},
+            tool_call_id=k,
+        )
+        for k, (name, task_args, obs) in new_observations.items()
+    ]
+    return tool_messages
+
+
+def plan_and_schedule(state: State):
+    messages = state.messages
+    tools = state.tools
+    planner = LLMCompilerPlanParser(tools)
+    tasks = planner.stream(messages)
+
+    # Eager execution: dispatch tasks as they're planned
+    tasks = itertools.chain([next(tasks)], tasks)
+
+    scheduled_tasks = schedule_tasks(
+        {
+            "messages": messages,
+            "tasks": tasks,
+            "tools": tools,
+        }
+    )
+    return State(messages=scheduled_tasks, tools=tools)
+
+
+def _joiner(state: State):
+    print("🔗 Joining results...")
+
+    messages = state.messages
+    user_input = messages[0].content
+
+    prompt = f"""Original request: {user_input}
+
+Based on the completed tasks, provide a comprehensive response summarizing what was accomplished."""
+
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    response = llm.invoke([HumanMessage(content=prompt)])
+    print(f"📝 Final response: {response.content[:200]}...")
+
+    return State(messages=messages + [response], tools=state.tools)
+
+
+def should_continue(state: State):
+    messages = state.messages
+    if isinstance(messages[-1], AIMessage):
+        return END
+    return "plan_and_schedule"
 
 
 class LLMCompiler:
-    def __init__(
-        self,
-        tools: list[BaseTool],
-    ):
-        self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    def __init__(self, tools: list[BaseTool]):
         self.tools = tools
-        self.planner = Planner(self.llm, tools)
-        self.scheduler = TaskScheduler(tools)
-        self.joiner = Joiner(self.llm)
+        self.graph = self._build_graph()
 
-    def run(
-        self,
-        user_input: str,
-    ) -> str:
-        tasks = self.planner.plan(user_input)
-        results = self.scheduler.execute_dag(tasks)
-        return self.joiner.join(user_input, results)
+    def _build_graph(self):
+        graph_builder = StateGraph(State)
+        graph_builder.add_node("plan_and_schedule", plan_and_schedule)
+        graph_builder.add_node("join", _joiner)
+        graph_builder.add_edge("plan_and_schedule", "join")
+        graph_builder.add_conditional_edges("join", should_continue)
+        graph_builder.add_edge(START, "plan_and_schedule")
+        return graph_builder.compile()
+
+    async def run(self, user_input: str):
+        print("🚀 Starting LLMCompiler execution")
+
+        initial_state = State(
+            messages=[HumanMessage(content=user_input)],
+            tools=self.tools,
+        )
+
+        for step in self.graph.stream(initial_state):
+            yield step
