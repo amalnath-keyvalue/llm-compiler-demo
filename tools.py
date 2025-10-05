@@ -51,7 +51,7 @@ def generate_code(
     return response.content
 
 
-def get_scaffolding_tools():
+def get_tools():
     return [
         create_file,
         create_directory,

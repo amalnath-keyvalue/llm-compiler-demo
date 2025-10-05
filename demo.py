@@ -4,7 +4,7 @@ import os
 from dotenv import load_dotenv
 
 from llm_compiler import LLMCompiler
-from scaffolding_tools import get_scaffolding_tools
+from tools import get_tools
 
 load_dotenv()
 
@@ -29,7 +29,7 @@ async def main():
         print("Please set OPENAI_API_KEY environment variable")
         return
 
-    tools = get_scaffolding_tools()
+    tools = get_tools()
     compiler = LLMCompiler(tools)
 
     print("=== LLMCompiler Project Scaffolding Demo ===\n")

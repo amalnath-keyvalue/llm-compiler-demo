@@ -158,13 +158,13 @@ def _get_observations(messages: list[Any]) -> dict[int, Any]:
 
 
 def _resolve_arg(arg: str, observations: dict[int, Any]) -> str:
-    ID_PATTERN = r"\$\{?(\d+)\}?"
+    id_pattern = r"\$\{?(\d+)\}?"
 
     def replace_match(match):
         idx = int(match.group(1))
         return str(observations.get(idx, match.group(0)))
 
-    return re.sub(ID_PATTERN, replace_match, arg)
+    return re.sub(id_pattern, replace_match, arg)
 
 
 def _execute_task(
@@ -250,7 +250,8 @@ def schedule_tasks(scheduler_input: dict[str, Any]) -> list[FunctionMessage]:
 
             if deps and any(dep not in observations for dep in deps):
                 print(
-                    f"[{time.time() - execution_start:.3f}s] ⏳ QUEUED {task.idx}: {task.tool} (waiting for: {', '.join(map(str, deps))})"
+                    f"[{time.time() - execution_start:.3f}s] ⏳ QUEUED {task.idx}: {task.tool} "
+                    f"(waiting for: {', '.join(map(str, deps))})"
                 )
                 futures.append(
                     executor.submit(
