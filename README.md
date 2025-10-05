@@ -22,11 +22,13 @@ A complete implementation of the LLMCompiler architecture from the [LangGraph tu
 ```bash
 pyenv local 3.12
 ```
+   Install pyenv: https://github.com/pyenv/pyenv#installation
 
 2. Install Poetry:
 ```bash
 pipx install poetry
 ```
+   Install pipx: https://pypa.github.io/pipx/installation/
 
 3. Install dependencies:
 ```bash
