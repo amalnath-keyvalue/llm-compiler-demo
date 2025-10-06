@@ -1,6 +1,8 @@
 import os
 
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.tools import tool
+from pydantic import BaseModel
 
 from config import get_llm
 
@@ -41,14 +43,22 @@ def generate_code(
     context: list[str] | None = None,
 ) -> str:
     """Generate code based on description"""
+
+    class CodeResponse(BaseModel):
+        code: str
+
     llm = get_llm()
+    parser = PydanticOutputParser(pydantic_object=CodeResponse)
 
     prompt = f"Generate {language} code for: {description}"
     if context:
         prompt += f"\nContext: {' '.join(context)}"
 
+    prompt += f"\n{parser.get_format_instructions()}"
+
     response = llm.invoke(prompt)
-    return response.content
+    parsed = parser.parse(response.content)
+    return parsed.code
 
 
 def get_tools():
