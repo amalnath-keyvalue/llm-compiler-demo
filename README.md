@@ -13,7 +13,7 @@ A complete implementation of the LLMCompiler architecture from the [LangGraph tu
 ## 📋 Architecture
 
 - **Planner**: Streams tasks from LLM using LangChain Hub prompts
-- **Task Fetching Unit**: Dispatches tasks immediately when dependencies are met
+- **Scheduler**: Dispatches tasks immediately when dependencies are met
 - **Joiner**: Summarizes results and determines completion
 
 ## 🛠️ Setup
