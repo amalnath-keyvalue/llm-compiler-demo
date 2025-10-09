@@ -27,7 +27,14 @@ cp env.example .env
 # Edit .env with your API key
 ```
 
-5. Run demo:
+5. Run LLMCompiler:
+
+**Main Application:**
 ```bash
-poetry run python main.py
+poetry run python -m src.main
+```
+
+**Checkpoints (Step-by-step Implementation):**
+```bash
+poetry run python -m src.checkpoints.main
 ```

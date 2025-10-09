@@ -4,6 +4,8 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
+from .config import get_llm
+from .constants import JOIN_PROMPT_TEMPLATE, SHOULD_CONTINUE_PROMPT_TEMPLATE
 from .planner import Planner
 from .scheduler import Scheduler
 from .schemas import State
@@ -17,6 +19,7 @@ class LLMCompiler:
         self.tools = tools
         self.planner = Planner(tools)
         self.scheduler = Scheduler()
+        self.llm = get_llm()
         self.graph = self._create_graph()
 
     def _create_graph(
@@ -35,7 +38,6 @@ class LLMCompiler:
         state: State,
     ):
         messages = state.messages
-        tools = state.tools
         execution_start = time.time()
 
         tasks = self.planner.plan_tasks(
@@ -45,59 +47,86 @@ class LLMCompiler:
         task_messages = self.scheduler.schedule_tasks(
             tasks=tasks,
             messages=messages,
-            tools=tools,
+            tools=self.tools,
             execution_start=execution_start,
         )
+        messages = [*messages, *task_messages]
 
         return State(
-            messages=task_messages,
-            tools=tools,
+            messages=messages,
         )
 
     def _join(
         self,
         state: State,
     ):
-        print("🔗 Joining results...")
+        print("🔗 JOINER: Joining results")
         messages = state.messages
-        tools = state.tools
 
+        user_query = next(
+            (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
+        )
         task_results = {
             message.tool_call_id: message.content
             for message in messages
             if isinstance(message, ToolMessage)
         }
-
-        if not task_results:
-            return State(
-                messages=[AIMessage(content="No tasks were executed.")],
-                tools=tools,
-            )
-
-        summary = (
-            "Task execution completed successfully. Here's what was accomplished:\n\n"
+        results_text = "\n\n".join(
+            [
+                f"Task {idx}: {result}"
+                for idx, result in sorted(task_results.items(), key=lambda x: int(x[0]))
+            ]
         )
-        for idx, result in sorted(task_results.items(), key=lambda x: int(x[0])):
-            summary += f"Task {idx}: {result[:200]}...\n\n"
 
-        print(f"📝 Final response: {summary}")
+        join_prompt = JOIN_PROMPT_TEMPLATE.format(
+            user_query=user_query,
+            results_text=results_text,
+        )
+
+        response = self.llm.invoke(join_prompt)
+        print(f"📝 JOINER: Joined response: {response.content[:500]}...")
+        messages = [*messages, AIMessage(content=response.content)]
+
         return State(
-            messages=[AIMessage(content=summary)],
-            tools=tools,
+            messages=messages,
         )
 
     def _should_continue(
         self,
-        _state: State,
+        state: State,
     ):
-        # TODO: Implement a better re-planning logic
+        print("🤔 DECIDER: Deciding whether to continue")
+        messages = state.messages
+
+        user_query = next(
+            (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
+        )
+        latest_response = next(
+            (m.content for m in reversed(messages) if isinstance(m, AIMessage)), ""
+        )
+
+        continue_prompt = SHOULD_CONTINUE_PROMPT_TEMPLATE.format(
+            user_query=user_query,
+            latest_response=latest_response,
+        )
+
+        response = self.llm.invoke(continue_prompt)
+        decision = response.content.strip().upper()
+
+        print(f"🎯 DECIDER: Decision: {decision}")
+
+        if decision == "REPLAN":
+            print("🔄 DECIDER: Re-planning needed, returning to planning phase")
+            return "plan_and_schedule"
+
+        print("✅ DECIDER: Task complete, ending execution")
         return END
 
     async def run(
         self,
         user_input: str,
     ):
-        print("🚀 Starting LLMCompiler execution")
+        print("🚀 LLMCompiler: Starting execution")
 
         initial_state = State(
             messages=[HumanMessage(content=user_input)],

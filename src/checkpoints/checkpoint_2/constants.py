@@ -43,36 +43,3 @@ Format: N. tool_name(param='value', other='$N') (deps: [1, 2, 3])""",
         "tool_names",
     ],
 )
-
-JOIN_PROMPT_TEMPLATE = PromptTemplate(
-    template="""Synthesize task execution results into a coherent response.
-
-Original user query: {user_query}
-
-Task execution results:
-{results_text}
-
-Please provide a comprehensive, well-structured response that addresses the user's original query based on these task results. 
-Be specific about what was accomplished and provide any relevant details from the task outputs.""",
-    input_variables=["user_query", "results_text"],
-)
-
-SHOULD_CONTINUE_PROMPT_TEMPLATE = PromptTemplate(
-    template="""Determine whether a task execution is complete or needs re-planning.
-
-Original user query: {user_query}
-
-Current response: {latest_response}
-
-Based on the original query and the current response, decide if:
-1. The task is COMPLETE and satisfactory (return "END")
-2. The task needs RE-PLANNING because something is missing or incorrect (return "REPLAN")
-
-Consider:
-- Does the response fully address the user's query?
-- Are there any obvious gaps or issues?
-- Would additional tasks improve the result?
-
-Respond with only "END" or "REPLAN".""",
-    input_variables=["user_query", "latest_response"],
-)

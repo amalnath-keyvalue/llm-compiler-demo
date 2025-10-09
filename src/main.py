@@ -3,8 +3,8 @@ import os
 
 from dotenv import load_dotenv
 
-from src.llm_compiler import LLMCompiler
-from src.scaffolding import get_tools
+from .llm_compiler import LLMCompiler
+from .scaffolding import get_tools
 
 load_dotenv()
 
