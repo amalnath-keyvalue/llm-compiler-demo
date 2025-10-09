@@ -51,7 +51,6 @@ class BaseLLMCompiler:
     ):
         initial_state = State(
             messages=[HumanMessage(content=user_input)],
-            tools=self.tools,
         )
 
         return self.graph.invoke(initial_state)

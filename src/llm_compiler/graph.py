@@ -43,6 +43,7 @@ class LLMCompiler:
         tasks = self.planner.plan_tasks(
             messages=messages,
             execution_start=execution_start,
+            needs_replan=state.needs_replan,
         )
         task_messages = self.scheduler.schedule_tasks(
             tasks=tasks,
@@ -54,6 +55,7 @@ class LLMCompiler:
 
         return State(
             messages=messages,
+            needs_replan=False,
         )
 
     def _join(
@@ -87,39 +89,35 @@ class LLMCompiler:
         print(f"📝 JOINER: Joined response: {response.content[:500]}...")
         messages = [*messages, AIMessage(content=response.content)]
 
+        print("🤔 JOINER: Deciding whether to continue")
+        continue_prompt = SHOULD_CONTINUE_PROMPT_TEMPLATE.format(
+            user_query=user_query,
+            latest_response=response.content,
+        )
+
+        should_continue_response = self.llm.invoke(continue_prompt)
+        decision = should_continue_response.content.strip().upper()
+        print(f"🎯 JOINER: Decision: {decision}")
+
+        if decision == "REPLAN":
+            print("🔄 JOINER: Re-planning needed, returning to planning phase")
+            return State(
+                messages=messages,
+                needs_replan=True,
+            )
+
+        print("✅ JOINER: Task complete, ending execution")
         return State(
             messages=messages,
+            needs_replan=False,
         )
 
     def _should_continue(
         self,
         state: State,
     ):
-        print("🤔 DECIDER: Deciding whether to continue")
-        messages = state.messages
-
-        user_query = next(
-            (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
-        )
-        latest_response = next(
-            (m.content for m in reversed(messages) if isinstance(m, AIMessage)), ""
-        )
-
-        continue_prompt = SHOULD_CONTINUE_PROMPT_TEMPLATE.format(
-            user_query=user_query,
-            latest_response=latest_response,
-        )
-
-        response = self.llm.invoke(continue_prompt)
-        decision = response.content.strip().upper()
-
-        print(f"🎯 DECIDER: Decision: {decision}")
-
-        if decision == "REPLAN":
-            print("🔄 DECIDER: Re-planning needed, returning to planning phase")
+        if state.needs_replan:
             return "plan_and_schedule"
-
-        print("✅ DECIDER: Task complete, ending execution")
         return END
 
     async def run(
@@ -130,7 +128,6 @@ class LLMCompiler:
 
         initial_state = State(
             messages=[HumanMessage(content=user_input)],
-            tools=self.tools,
         )
 
         return self.graph.invoke(initial_state)

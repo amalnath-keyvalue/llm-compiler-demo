@@ -1,11 +1,11 @@
 import re
 import time
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 
 from .config import get_llm
-from .constants import PLANNER_PROMPT_TEMPLATE
+from .constants import PLANNER_PROMPT_TEMPLATE, REPLANNER_PROMPT_TEMPLATE
 from .schemas import Task
 
 
@@ -44,19 +44,86 @@ class Planner:
         self,
         messages: list[BaseMessage],
         execution_start: float,
+        needs_replan: bool = False,
     ):
+        if needs_replan:
+            print(
+                f"[{time.time() - execution_start:.3f}s] 🔄 RE-PLANNER: Started replanning tasks"
+            )
+            return self._replan_tasks(
+                messages=messages,
+                execution_start=execution_start,
+            )
+
         print(
             f"[{time.time() - execution_start:.3f}s] 📋 PLANNER: Started planning tasks"
         )
-        user_query = messages[0].content if messages else "No query provided"
+        return self._plan_tasks(
+            messages=messages,
+            execution_start=execution_start,
+        )
 
+    def _plan_tasks(
+        self,
+        messages: list[BaseMessage],
+        execution_start: float,
+    ):
+        user_query = next(
+            (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
+        )
         prompt = PLANNER_PROMPT_TEMPLATE.format(
             tool_count=len(self.tools),
             tool_names=self.tool_names,
             tool_descriptions=self.tool_descriptions,
             user_query=user_query,
         )
+        return self._execute_planning(
+            prompt=prompt,
+            execution_start=execution_start,
+        )
 
+    def _replan_tasks(
+        self,
+        messages: list[BaseMessage],
+        execution_start: float,
+    ):
+        user_query = next(
+            (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
+        )
+        latest_response = next(
+            (m.content for m in reversed(messages) if isinstance(m, AIMessage)), ""
+        )
+        task_results = {
+            message.tool_call_id: message.content
+            for message in messages
+            if isinstance(message, ToolMessage)
+        }
+        results_text = "\n\n".join(
+            [
+                f"Task {idx}: {result}"
+                for idx, result in sorted(task_results.items(), key=lambda x: int(x[0]))
+            ]
+        )
+
+        prompt = REPLANNER_PROMPT_TEMPLATE.format(
+            tool_count=len(self.tools),
+            tool_descriptions=self.tool_descriptions,
+            user_query=user_query,
+            results_text=results_text,
+            latest_response=latest_response,
+            tool_names=self.tool_names,
+        )
+
+        return self._execute_planning(
+            prompt=prompt,
+            execution_start=execution_start,
+        )
+
+    def _execute_planning(
+        self,
+        prompt: str,
+        execution_start: float,
+    ):
         buffer = ""
         for chunk in self.llm.stream(prompt):
             if chunk.content:

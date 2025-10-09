@@ -1,6 +1,6 @@
 import time
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, HumanMessage
 from langchain_core.tools import BaseTool
 
 from .config import get_llm
@@ -46,8 +46,9 @@ class SimplePlanner:
         print(
             f"[{time.time() - execution_start:.3f}s] 📋 PLANNER: Started planning tasks"
         )
-        user_query = messages[0].content if messages else "No query provided"
-
+        user_query = next(
+            (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
+        )
         prompt = PLANNER_PROMPT_TEMPLATE.format(
             tool_count=len(self.tools),
             tool_names=self.tool_names,

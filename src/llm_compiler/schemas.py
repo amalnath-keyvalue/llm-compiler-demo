@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 class State(BaseModel):
     messages: list[BaseMessage]
+    needs_replan: bool = False
 
 
 class Task(BaseModel):
