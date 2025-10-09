@@ -1,55 +1,102 @@
-import itertools
 import time
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
-from langgraph.graph import START, StateGraph
+from langgraph.graph import END, START, StateGraph
 
-from .joiner import Joiner
 from .planner import Planner
 from .scheduler import Scheduler
-from .state import State
+from .schemas import State
 
 
 class LLMCompiler:
-    def __init__(self, tools: list[BaseTool]):
+    def __init__(
+        self,
+        tools: list[BaseTool],
+    ):
         self.tools = tools
         self.planner = Planner(tools)
         self.scheduler = Scheduler()
-        self.joiner = Joiner()
         self.graph = self._create_graph()
 
-    def _plan_and_schedule(self, state: State) -> State:
-        """Plan and schedule tasks"""
+    def _create_graph(
+        self,
+    ):
+        graph_builder = StateGraph(State)
+        graph_builder.add_node("plan_and_schedule", self._plan_and_schedule)
+        graph_builder.add_node("join", self._join)
+        graph_builder.add_edge(START, "plan_and_schedule")
+        graph_builder.add_edge("plan_and_schedule", "join")
+        graph_builder.add_conditional_edges("join", self._should_continue)
+        return graph_builder.compile()
+
+    def _plan_and_schedule(
+        self,
+        state: State,
+    ):
         messages = state.messages
         tools = state.tools
         execution_start = time.time()
 
-        tasks = self.planner.stream(messages, execution_start)
-        tasks = itertools.chain([next(tasks)], tasks)
-
-        scheduled_tasks = self.scheduler.schedule_tasks(
-            {
-                "messages": messages,
-                "tasks": tasks,
-                "tools": tools,
-                "execution_start": execution_start,
-            }
+        tasks = self.planner.plan_tasks(
+            messages=messages,
+            execution_start=execution_start,
         )
-        return State(messages=scheduled_tasks, tools=tools)
+        task_messages = self.scheduler.schedule_tasks(
+            tasks=tasks,
+            messages=messages,
+            tools=tools,
+            execution_start=execution_start,
+        )
 
-    def _create_graph(self) -> StateGraph:
-        """Create the LangGraph workflow"""
-        graph_builder = StateGraph(State)
-        graph_builder.add_node("plan_and_schedule", self._plan_and_schedule)
-        graph_builder.add_node("join", self.joiner.join)
-        graph_builder.add_edge("plan_and_schedule", "join")
-        graph_builder.add_conditional_edges("join", self.joiner.should_continue)
-        graph_builder.add_edge(START, "plan_and_schedule")
-        return graph_builder.compile()
+        return State(
+            messages=task_messages,
+            tools=tools,
+        )
 
-    async def run(self, user_input: str):
-        """Run the LLMCompiler with user input"""
+    def _join(
+        self,
+        state: State,
+    ):
+        print("🔗 Joining results...")
+        messages = state.messages
+        tools = state.tools
+
+        task_results = {
+            message.tool_call_id: message.content
+            for message in messages
+            if isinstance(message, ToolMessage)
+        }
+
+        if not task_results:
+            return State(
+                messages=[AIMessage(content="No tasks were executed.")],
+                tools=tools,
+            )
+
+        summary = (
+            "Task execution completed successfully. Here's what was accomplished:\n\n"
+        )
+        for idx, result in sorted(task_results.items(), key=lambda x: int(x[0])):
+            summary += f"Task {idx}: {result[:200]}...\n\n"
+
+        print(f"📝 Final response: {summary}")
+        return State(
+            messages=[AIMessage(content=summary)],
+            tools=tools,
+        )
+
+    def _should_continue(
+        self,
+        _state: State,
+    ):
+        # TODO: Implement a better re-planning logic
+        return END
+
+    async def run(
+        self,
+        user_input: str,
+    ):
         print("🚀 Starting LLMCompiler execution")
 
         initial_state = State(

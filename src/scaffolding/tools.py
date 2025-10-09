@@ -3,9 +3,8 @@ import time
 
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-
-from config import get_llm
 
 
 @tool
@@ -15,9 +14,9 @@ def create_directory(
     """Create a directory structure. Use this before creating files inside directories.
     This tool should typically be used before create_file when files need to be placed in specific directories.
     """
-    time.sleep(3)
-    if not path.startswith("demo_output/"):
-        path = f"demo_output/{path}"
+    time.sleep(1)  # arbitrary delay to simulate long operation
+    if not path.startswith("generated_projects/"):
+        path = f"generated_projects/{path}"
 
     os.makedirs(path, exist_ok=True)
     return f"Created directory: {path}"
@@ -37,7 +36,10 @@ def generate_file_content(
     class Response(BaseModel):
         file_content: str
 
-    llm = get_llm()
+    llm = ChatOpenAI(
+        model="gpt-4o-mini",
+        temperature=0,
+    )
     parser = PydanticOutputParser(pydantic_object=Response)
 
     prompt = f"Generate {content_type} content for: {description}"
@@ -59,9 +61,9 @@ def create_file(
     """Create a file with specified content. Use this to save generated content to files.
     IMPORTANT: Always use $N syntax to reference output from generate_file_content tasks instead of hardcoding content.
     The content parameter can reference output from previous tasks using $N syntax."""
-    time.sleep(3)
-    if not path.startswith("demo_output/"):
-        path = f"demo_output/{path}"
+    time.sleep(1)  # arbitrary delay to simulate long operation
+    if not path.startswith("generated_projects/"):
+        path = f"generated_projects/{path}"
 
     dir_path = os.path.dirname(path)
     if dir_path:

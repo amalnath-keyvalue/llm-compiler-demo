@@ -40,4 +40,4 @@ htmlcov/
 
 .python-version
 
-demo_output/
+generated_projects/
