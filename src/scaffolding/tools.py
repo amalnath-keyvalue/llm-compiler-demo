@@ -12,7 +12,7 @@ def create_directory(
     path: str,
 ) -> str:
     """Create a directory structure. Use this before creating files inside directories.
-    This tool should typically be used before create_file when files need to be placed in specific directories.
+    IMPORTANT: This tool should typically be used before create_file when files need to be placed in specific directories.
     """
     time.sleep(1)  # arbitrary delay to simulate long operation
     if not path.startswith("generated_projects/"):
@@ -30,7 +30,6 @@ def generate_file_content(
 ) -> str:
     """Generate file content based on description. Use this to create content that will be used by other tasks.
     IMPORTANT: Always use this tool to generate content instead of hardcoding it in create_file tasks.
-    The output of this tool should typically be referenced by create_file tasks using $N syntax.
     """
 
     class Response(BaseModel):
@@ -59,8 +58,8 @@ def create_file(
     content: str,
 ) -> str:
     """Create a file with specified content. Use this to save generated content to files.
-    IMPORTANT: Always use $N syntax to reference output from generate_file_content tasks instead of hardcoding content.
-    The content parameter can reference output from previous tasks using $N syntax."""
+    IMPORTANT: Always use output from generate_file_content tasks instead of hardcoding content.
+    """
     time.sleep(1)  # arbitrary delay to simulate long operation
     if not path.startswith("generated_projects/"):
         path = f"generated_projects/{path}"

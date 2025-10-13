@@ -21,20 +21,20 @@ GUIDELINES:
 - Only use the provided action types. If a query cannot be addressed using these, explain what additional tools would be needed.
 - Never introduce new actions other than the ones provided.
 
-DEPENDENCIES: Use $N to reference previous task outputs.
-Example: tool_name(param='$2') uses output from task 2.
+DEPENDENCIES - CRITICAL:
+For EACH task, ask two questions:
 
-PLANNING: Break tasks into logical steps with dependencies:
-- When one task produces output that another task needs as input, use $N to reference it
-- Create dependencies to form an efficient workflow
-- Independent tasks can run in parallel
+1. Does this task use output ($N) from earlier tasks?
+   → Add those task numbers to deps
 
-CRITICAL: Always use dependencies when one task's output is needed by another!
-- If task A produces output, and task B needs that output, use $A in task B
-- Create dependencies to form an efficient workflow
-- This creates a DAG where tasks execute based on dependencies, not plan order
+2. Does this task need anything created/established by earlier tasks?
+   → Look at EACH parameter value - does it depend on something an earlier task creates?
+   → Add those task numbers to deps
 
-Format: N. tool_name(param='value', other='$N') (deps: [1, 2, 3])""",
+Include ALL dependencies in (deps: [...]) - both data and ordering.
+If a task needs nothing from earlier tasks, use (deps: [])
+
+FORMAT: N. tool_name(param='value', other='$N') (deps: [all, dependency, numbers])""",
     input_variables=[
         "tool_count",
         "tool_descriptions",
@@ -53,7 +53,10 @@ Task execution results:
 
 Please provide a comprehensive, well-structured response that addresses the user's original query based on these task results. 
 Be specific about what was accomplished and provide any relevant details from the task outputs.""",
-    input_variables=["user_query", "results_text"],
+    input_variables=[
+        "user_query",
+        "results_text",
+    ],
 )
 
 SHOULD_CONTINUE_PROMPT_TEMPLATE = PromptTemplate(
@@ -107,16 +110,22 @@ GUIDELINES:
 - Never introduce new actions other than the ones provided.
 - Build upon the existing results and address any gaps or issues identified.
 
-DEPENDENCIES: Use $N to reference previous task outputs.
-Example: tool_name(param='$2') uses output from task 2.
+DEPENDENCIES - CRITICAL:
+For EACH task, ask two questions:
 
-REPLANNING: Create additional tasks that:
-- Address gaps in the previous execution
-- Use different approaches if needed
-- Build upon existing results
-- Maximize parallelism
+1. Does this task use output ($N) from earlier tasks?
+   → Add those task numbers to deps
 
-Format: N. tool_name(param='value', other='$N') (deps: [1, 2, 3])""",
+2. Does this task need anything created/established by earlier tasks?
+   → Look at EACH parameter value - does it depend on something an earlier task creates?
+   → Add those task numbers to deps
+
+Include ALL dependencies in (deps: [...]) - both data and ordering.
+If a task needs nothing from earlier tasks, use (deps: [])
+
+REPLANNING: Address gaps, use different approaches if needed, maximize parallelism.
+
+FORMAT: N. tool_name(param='value', other='$N') (deps: [all, dependency, numbers])""",
     input_variables=[
         "tool_count",
         "tool_descriptions",

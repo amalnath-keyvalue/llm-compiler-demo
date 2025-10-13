@@ -21,20 +21,20 @@ GUIDELINES:
 - Only use the provided action types. If a query cannot be addressed using these, explain what additional tools would be needed.
 - Never introduce new actions other than the ones provided.
 
-DEPENDENCIES: Use $N to reference previous task outputs.
-Example: tool_name(param='$2') uses output from task 2.
+DEPENDENCIES - CRITICAL:
+For EACH task, ask two questions:
 
-PLANNING: Break tasks into logical steps with dependencies:
-- When one task produces output that another task needs as input, use $N to reference it
-- Create dependencies to form an efficient workflow
-- Independent tasks can run in parallel
+1. Does this task use output ($N) from earlier tasks?
+   → Add those task numbers to deps
 
-CRITICAL: Always use dependencies when one task's output is needed by another!
-- If task A produces output, and task B needs that output, use $A in task B
-- Create dependencies to form an efficient workflow
-- This creates a DAG where tasks execute based on dependencies, not plan order
+2. Does this task need anything created/established by earlier tasks?
+   → Look at EACH parameter value - does it depend on something an earlier task creates?
+   → Add those task numbers to deps
 
-Format: N. tool_name(param='value', other='$N') (deps: [1, 2, 3])""",
+Include ALL dependencies in (deps: [...]) - both data and ordering.
+If a task needs nothing from earlier tasks, use (deps: [])
+
+FORMAT: N. tool_name(param='value', other='$N') (deps: [all, dependency, numbers])""",
     input_variables=[
         "tool_count",
         "tool_descriptions",
