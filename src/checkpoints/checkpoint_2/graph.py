@@ -21,6 +21,7 @@ class LLMCompilerWithSimplePlannerOnly(BaseLLMCompiler):
         self,
         state: State,
     ):
+        print("📊 GRAPH ARRIVED AT: plan_and_schedule")
         execution_start = time.time()
         messages = state.messages
 

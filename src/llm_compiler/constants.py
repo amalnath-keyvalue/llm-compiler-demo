@@ -31,7 +31,6 @@ PLANNING: Break tasks into logical steps with dependencies:
 
 CRITICAL: Always use dependencies when one task's output is needed by another!
 - If task A produces output, and task B needs that output, use $A in task B
-- Generate content for EACH file separately - don't generate everything at once
 - Create dependencies to form an efficient workflow
 - This creates a DAG where tasks execute based on dependencies, not plan order
 

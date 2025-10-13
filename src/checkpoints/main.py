@@ -1,3 +1,4 @@
+import argparse
 import asyncio
 import os
 
@@ -13,30 +14,74 @@ from .tools import get_tools
 load_dotenv()
 
 
-async def main():
+async def main(
+    checkpoint: int | None = None,
+    query: str | None = None,
+):
     if not os.getenv("OPENAI_API_KEY"):
         print("Please set OPENAI_API_KEY environment variable")
         return
 
     tools = get_tools()
-    compiler1 = BaseLLMCompiler(tools)
-    compiler2 = LLMCompilerWithSimplePlannerOnly(tools)
-    compiler3 = LLMCompilerWithPlannerOnly(tools)
-    compiler4 = LLMCompilerWithPlannerAndSimpleSchedulerOnly(tools)
-    compiler5 = LLMCompilerWithPlannerAndSchedulerOnly(tools)
 
-    query = "Create a counter app with a button to increment and display the count using React and Tailwind CSS"
-    print("🚀 RUNNING BaseLLMCompiler")
-    await compiler1.run(query)
-    print("📋 RUNNING LLMCompilerWithSimplePlannerOnly")
-    await compiler2.run(query)
-    print("📝 RUNNING LLMCompilerWithPlannerOnly")
-    await compiler3.run(query)
-    print("⏰ RUNNING LLMCompilerWithPlannerAndSimpleSchedulerOnly")
-    await compiler4.run(query)
-    print("⚙️ RUNNING LLMCompilerWithPlannerAndSchedulerOnly")
-    await compiler5.run(query)
+    if query is None:
+        query = "Create a counter app with a button to increment and display the count using React and Tailwind CSS"
+
+    checkpoints: dict[int, tuple[type[BaseLLMCompiler], str]] = {
+        1: (BaseLLMCompiler, "🚀 RUNNING BaseLLMCompiler"),
+        2: (
+            LLMCompilerWithSimplePlannerOnly,
+            "📋 RUNNING LLMCompilerWithSimplePlannerOnly",
+        ),
+        3: (LLMCompilerWithPlannerOnly, "📝 RUNNING LLMCompilerWithPlannerOnly"),
+        4: (
+            LLMCompilerWithPlannerAndSimpleSchedulerOnly,
+            "⏰ RUNNING LLMCompilerWithPlannerAndSimpleSchedulerOnly",
+        ),
+        5: (
+            LLMCompilerWithPlannerAndSchedulerOnly,
+            "⚙️ RUNNING LLMCompilerWithPlannerAndSchedulerOnly",
+        ),
+    }
+
+    if checkpoint:
+        if checkpoint not in checkpoints:
+            print(
+                f"Error: Checkpoint {checkpoint} not found. Available checkpoints: 1-5"
+            )
+            return
+        compiler_class, message = checkpoints[checkpoint]
+        print(message)
+        compiler = compiler_class(tools)
+        await compiler.run(query)
+
+    else:
+        for cp_num in sorted(checkpoints.keys()):
+            compiler_class, message = checkpoints[cp_num]
+            print(message)
+            compiler = compiler_class(tools)
+            await compiler.run(query)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    parser = argparse.ArgumentParser(description="Run LLM Compiler checkpoints")
+    parser.add_argument(
+        "checkpoint",
+        type=int,
+        nargs="?",
+        choices=[1, 2, 3, 4, 5],
+        help="Checkpoint number to run (1-5). If not provided, runs all checkpoints.",
+    )
+    parser.add_argument(
+        "--query",
+        type=str,
+        help="Custom query to run. If not provided, uses default counter app query.",
+    )
+
+    args = parser.parse_args()
+    asyncio.run(
+        main(
+            checkpoint=args.checkpoint,
+            query=args.query,
+        )
+    )

@@ -28,21 +28,21 @@ class BaseLLMCompiler:
         self,
         state: State,
     ):
-        print("📊 CURRENT NODE: Plan and schedule")
+        print("📊 GRAPH ARRIVED AT: plan_and_schedule")
         return state
 
     def _join(
         self,
         state: State,
     ):
-        print("📊 CURRENT NODE: Join")
+        print("📊 GRAPH ARRIVED AT: join")
         return state
 
     def _should_continue(
         self,
         _state: State,
     ):
-        print("📊 CURRENT NODE: Should continue")
+        print("📊 GRAPH ARRIVED AT: should_continue")
         return END
 
     async def run(
