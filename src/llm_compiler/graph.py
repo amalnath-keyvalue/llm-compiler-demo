@@ -1,5 +1,3 @@
-import time
-
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
@@ -38,7 +36,7 @@ class LLMCompiler:
         state: State,
     ):
         messages = state.messages
-        execution_start = time.time()
+        execution_start = state.execution_start
 
         tasks = self.planner.plan_tasks(
             messages=messages,

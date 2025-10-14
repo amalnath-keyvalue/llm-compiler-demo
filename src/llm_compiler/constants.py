@@ -83,7 +83,7 @@ Respond with only "END" or "REPLAN".""",
 )
 
 REPLANNER_PROMPT_TEMPLATE = PromptTemplate(
-    template="""The previous execution was insufficient to fully address the user's query. 
+    template="""The latest execution was insufficient to fully address the user's query.
 Create a new plan that builds upon the current results.
 
 The plan should comprise a sequence of actions from the following {tool_count} types:
@@ -91,10 +91,10 @@ The plan should comprise a sequence of actions from the following {tool_count} t
 
 USER QUERY: {user_query}
 
-PREVIOUS EXECUTION RESULTS:
+LATEST EXECUTION RESULTS:
 {results_text}
 
-CURRENT RESPONSE: {latest_response}
+LATEST EXECUTION RESPONSE: {latest_response}
 
 IMPORTANT: Use exact tool names: {tool_names}
 
@@ -104,7 +104,8 @@ GUIDELINES:
   - The action descriptions contain the guidelines. You MUST strictly follow those guidelines when you use the actions.
 - Each action in the plan should strictly be one of the above types. Follow the conventions for each action.
 - Each action MUST have a unique ID, which is strictly increasing.
-- Inputs for actions can either be constants or outputs from preceding actions. In the latter case, use the format $id to denote the ID of the previous action whose output will be the input.
+- Tasks 1 through {max_existing_idx} have already been executed. Your new tasks MUST start from {max_existing_idx} + 1 and continue incrementing from there.
+- Inputs for actions can either be constants or outputs from preceding actions (including the already-executed tasks 1-{max_existing_idx}). Use the format $id to denote the ID of the previous action whose output will be the input.
 - Ensure the plan maximizes parallelism.
 - Only use the provided action types. If a query cannot be addressed using these, explain what additional tools would be needed.
 - Never introduce new actions other than the ones provided.
@@ -113,7 +114,7 @@ GUIDELINES:
 DEPENDENCIES - CRITICAL:
 For EACH task, ask two questions:
 
-1. Does this task use output ($N) from earlier tasks?
+1. Does this task use output ($N) from earlier tasks (including completed tasks 1-{max_existing_idx})?
    → Add those task numbers to deps
 
 2. Does this task need anything created/established by earlier tasks?
@@ -133,5 +134,6 @@ FORMAT: N. tool_name(param='value', other='$N') (deps: [all, dependency, numbers
         "results_text",
         "latest_response",
         "tool_names",
+        "max_existing_idx",
     ],
 )

@@ -90,9 +90,6 @@ class Planner:
         user_query = next(
             (m.content for m in reversed(messages) if isinstance(m, HumanMessage)), ""
         )
-        latest_response = next(
-            (m.content for m in reversed(messages) if isinstance(m, AIMessage)), ""
-        )
         task_results = {
             message.tool_call_id: message.content
             for message in messages
@@ -104,14 +101,18 @@ class Planner:
                 for idx, result in sorted(task_results.items(), key=lambda x: int(x[0]))
             ]
         )
+        latest_response = next(
+            (m.content for m in reversed(messages) if isinstance(m, AIMessage)), ""
+        )
 
         prompt = REPLANNER_PROMPT_TEMPLATE.format(
             tool_count=len(self.tools),
+            tool_names=self.tool_names,
             tool_descriptions=self.tool_descriptions,
             user_query=user_query,
             results_text=results_text,
             latest_response=latest_response,
-            tool_names=self.tool_names,
+            max_existing_idx=max((int(idx) for idx in task_results.keys()), default=0),
         )
 
         return self._execute_planning(
