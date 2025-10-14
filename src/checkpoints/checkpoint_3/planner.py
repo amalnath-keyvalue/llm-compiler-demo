@@ -17,7 +17,8 @@ class Planner(SimplePlanner):
                 f" (deps: {task.dependencies})" if task.dependencies else " (no deps)"
             )
             print(
-                f"[{time.time() - execution_start:.3f}s] 📋 PLANNER: Planned task {task.idx}: {task.tool}({task.args}){deps_str}"
+                f"[{time.time() - execution_start:.3f}s] 📋 PLANNER: Planned task {task.idx}: "
+                f"{task.tool}({task.args}){deps_str}"
             )
             return task
 
@@ -26,6 +27,7 @@ class Planner(SimplePlanner):
         line: str,
     ):
         line = line.strip()
+        # Example line: "3. tool_name(key='value', other='$2') (deps: [1,2])"
         match = re.match(
             r"^(\d+)\.\s*([^(]+)\(([^)]+)\)(?:\s*\(deps:\s*\[([^\]]*)\]\))?",
             line,

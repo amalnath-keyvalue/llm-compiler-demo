@@ -155,7 +155,8 @@ class Planner:
                 f" (deps: {task.dependencies})" if task.dependencies else " (no deps)"
             )
             print(
-                f"[{time.time() - execution_start:.3f}s] 📋 PLANNER: Planned task {task.idx}: {task.tool}({task.args}){deps_str}"
+                f"[{time.time() - execution_start:.3f}s] 📋 PLANNER: Planned task {task.idx}: "
+                f"{task.tool}({task.args}){deps_str}"
             )
             return task
 
